@@ -66,30 +66,64 @@ class AtomStyle(object):
         Arguments:
           style (str): line, cross, stick, sphere, cartoon, clicksphere
           colors (dict): element specific colors
-          cell (bool): show unit cell?
           style_specs: other options for specific styles, such as sphere
             scales or bond radii.  See documentation for AtomStyleSpec
 
         """
-        self.style = style
+        self.styles = [style]
         self.colors = colors
-        self.style_specs = style_specs
+        self.style_specs = [style_specs]
 
-    def add_to_view(self, data, frmt, selection, view):
-        view.addModel(data, frmt)
-        sel = {'model': -1}
+    def add_style(self, style, **style_specs):
+        """
+        Add another style to the representation.
+
+        Arguments:
+          style (str): line, cross, stick, sphere, cartoon, clicksphere
+          style_specs: other options for specific styles, such as sphere
+            scales or bond radii.  See documentation for AtomStyleSpec
+
+        """
+        self.styles.append(style)
+        self.style_specs.append(style_specs)
+
+    def apply(self, model, selection=None):
+        """
+        Apply style to a structure model.
+
+        Arguments:
+          model (3Dmol.js Model): the structure model
+          selection (dict): AtomSelectionSpec
+
+        """
         if selection is not None:
-            sel.update(selection)
-        if 'default' in self.colors:
-            view.setStyle(sel, {self.style: {'color': self.colors['default'],
-                                             **self.style_specs}})
+            sel = selection
         else:
-            view.setStyle(sel, {self.style: {**self.style_specs}})
+            sel = {}
+
+        if 'default' in self.colors:
+            default_color = self.colors['default']
+        else:
+            default_color = None
+
+        style_dict = {}
+        for i, style in enumerate(self.styles):
+            style_dict[style] = self.style_specs[i]
+            if default_color is not None:
+                style_dict[style]['color'] = default_color
+
+        model.setStyle(sel, style_dict)
+
+        # Overwrite default styles with element-specific colors.  Woud
+        # be great to make use of mode.setColorByElement() but I could
+        # not figure out how to use this method from Python.
         for species in self.colors:
             if species != 'default':
-                view.setStyle({'elem': species, **sel},
-                              {self.style: {'color': self.colors[species],
-                                            **self.style_specs}})
+                species_dict = style_dict.copy()
+                for style in species_dict:
+                    species_dict[style].update({'color': self.colors[species]})
+                model.setStyle({'elem': species, **sel},
+                               species_dict)
 
 
 class StickStyle(AtomStyle):
@@ -106,12 +140,9 @@ class VanDerWaalsStyle(AtomStyle):
 
 class BallAndStickStyle(AtomStyle):
     def __init__(self, sphere_scale=0.4, bond_radius=0.1, **kwargs):
-        self.balls = AtomStyle('sphere', scale=sphere_scale, **kwargs)
-        self.sticks = AtomStyle('stick', radius=bond_radius, **kwargs)
-
-    def add_to_view(self, data, frmt, selection, view):
-        self.balls.add_to_view(data, frmt, selection, view)
-        self.sticks.add_to_view(data, frmt, selection, view)
+        super(BallAndStickStyle, self).__init__(
+            style='sphere', scale=sphere_scale, **kwargs)
+        self.add_style(style="stick", radius=bond_radius, **kwargs)
 
 
 class UnitCellStyle(dict):

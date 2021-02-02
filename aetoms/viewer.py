@@ -3,13 +3,11 @@ Visualize atomic structures using py3Dmol and 3Dmol.js
 
 """
 
-import threading
-import time
-
 import py3Dmol
 import IPython
 from ipywidgets import (Button, Layout, IntSlider, Dropdown, Output,
-                        VBox, HBox, interactive_output)
+                        Play, IntText, BoundedIntText,
+                        VBox, HBox, interactive_output, jslink)
 
 __author__ = "Alexander Urban"
 __email__ = "aurban@atomistic.net"
@@ -103,8 +101,9 @@ class Viewer(object):
         """
         self.view = py3Dmol.view(width=self.width, height=self.height)
         for i, m in enumerate(self.models):
-            m.add_to_view(self.view)
+            m.add_to_view(self.view, i)
         self.view.zoomTo()
+        self._set_hoverable()
         self.view.show()
         if len(kwargs) > 0:
             self.update(**kwargs)
@@ -118,23 +117,25 @@ class Viewer(object):
             self.models[self.active_model].active_frame = frame
         if style is not None:
             self.models[self.active_model].update_representation(style)
-        self.view.removeAllModels()
-        for i, m in enumerate(self.models):
-            m.add_to_view(self.view)
+        for m in self.models:
+            m.update()
         self._set_hoverable()
         self.view.update()
 
     def app(self):
-        out = Output(layout=Layout(width="{}px".format(self.width+2),
-                                   height="{}px".format(self.height+2),
-                                   border='1px solid black'))
+        self._out = Output(layout=Layout(width="{}px".format(self.width+2),
+                                         height="{}px".format(self.height+2),
+                                         border='1px solid black'))
         sld_frame = IntSlider(description="Frame",
                               min=0, max=self.num_frames-1,
                               step=1, value=self.active_frame,
                               layout=Layout(width="{}px".format(self.width)))
-        btn_play = Button(description="▶")
-        btn_fwrd = Button(description="▶▶")
-        btn_revs = Button(description="◀◀")
+        btn_play = Play(description="Animate",
+                        min=0, max=self.num_frames-1,
+                        step=1, value=self.active_frame,
+                        interval=200)
+        btn_fwrd = Button(description="▶▶", layout=Layout(width="auto"))
+        btn_revs = Button(description="◀◀", layout=Layout(width="auto"))
         drd_model = Dropdown(description="Model",
                              options=list(range(self.num_models)),
                              value=self.active_model)
@@ -142,31 +143,18 @@ class Viewer(object):
                              options=['sticks', 'ballsticks', 'vanderwaals',
                                       'default'],
                              value='default')
-        ui = VBox([HBox([drd_model, drd_style]), out,
-                   sld_frame, HBox([btn_revs, btn_play, btn_fwrd])],
+        int_delay = IntText(description="Delay (ms)", value=100,
+                            layout=Layout(max_width="150px"))
+        int_step = BoundedIntText(description="Step", value=1,
+                                  min=1, max=self.num_frames,
+                                  layout=Layout(max_width="150px"))
+        ui = VBox([HBox([drd_model, drd_style]),
+                   self._out,
+                   HBox([VBox([int_step, int_delay]),
+                         VBox([sld_frame,
+                               HBox([btn_revs, btn_play, btn_fwrd])],
+                              layout=Layout(align_items='center'))])],
                   layout=Layout(align_items='center'))
-
-        t_play_stop = False
-
-        def play():
-            while True:
-                global t_play_stop
-                if t_play_stop:
-                    break
-                pass
-                # sld_frame.value = (sld_frame.value + 1) % sld_frame.max
-
-        t_play = threading.Thread(target=play)
-
-        def toggle_play(btn):
-            if btn.description == "▶":
-                btn.description = "◼"
-                t_play.start()
-            else:
-                global t_play_stop
-                t_play_stop = True
-                t_play.join()
-                btn.description = "▶"
 
         def frame_fwrd(btn):
             if (sld_frame.value < sld_frame.max):
@@ -177,12 +165,14 @@ class Viewer(object):
                 sld_frame.value -= 1
 
         def frame_change(model, frame, style):
-            with out:
+            with self._out:
                 self.update(model=model, frame=frame, style=style)
 
-        btn_play.on_click(toggle_play)
         btn_fwrd.on_click(frame_fwrd)
         btn_revs.on_click(frame_revs)
+        jslink((btn_play, "value"), (sld_frame, "value"))
+        jslink((int_delay, "value"), (btn_play, "interval"))
+        jslink((int_step, "value"), (btn_play, "step"))
         interactive_output(frame_change, {'model': drd_model,
                                           'style': drd_style,
                                           'frame': sld_frame})

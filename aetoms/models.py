@@ -31,7 +31,7 @@ atom_styles = {
 }
 
 
-def pdb(coords, types, a, b, c, alpha, beta, gamma):
+def pdb(coords, types, a, b, c, alpha, beta, gamma, model=1):
     """
     Return string in the protein databank atomic structure format.
 
@@ -40,14 +40,15 @@ def pdb(coords, types, a, b, c, alpha, beta, gamma):
       types[i] (str): chemical symbol of atom i
       a, b, c (float): lenghts of the three lattice vectors
       alpha, beta, gamma (float): cell angles in degrees
+      model (int): model number for multi-model files
 
     """
     header = ("CRYST1 {:8.3f} {:8.3f} {:8.3f} "
-              "{:6.2f} {:6.2f} {:6.2f} P 1\nMODEL     1\n")
+              "{:6.2f} {:6.2f} {:6.2f} P 1\nMODEL     {:d}\n")
     atom = ("ATOM {0:6d}   {1:2s} MOL     1     {2:7.3f} {3:7.3f} {4:7.3f} "
             "{5:5.2f}  0.00          {1:2s}\n")
     out = ""
-    out += header.format(a, b, c, alpha, beta, gamma)
+    out += header.format(a, b, c, alpha, beta, gamma, model)
     for i, coo in enumerate(coords):
         out += atom.format(i, types[i], coo[0], coo[1], coo[2], 0.0)
     out += "ENDMOL\n"
@@ -64,6 +65,9 @@ class Model(object):
         self.frmt = "pdb"
         self.show_cell = show_cell
         self.cell_style = UnitCellStyle()
+        self.model_id = None
+        self._view = None
+        self._model = None
 
     @classmethod
     def from_ase_atoms(cls, atoms, **kwargs):
@@ -72,12 +76,13 @@ class Model(object):
             trajec = [atoms]
         else:
             trajec = atoms
-        for frame in trajec:
+        for i, frame in enumerate(trajec):
             a, b, c = frame.cell.lengths()
             alpha, beta, gamma = frame.cell.angles()
             coords = frame.positions
             types = frame.get_chemical_symbols()
-            frames.append(pdb(coords, types, a, b, c, alpha, beta, gamma))
+            frames.append(pdb(coords, types, a, b, c, alpha, beta,
+                              gamma, model=(i+1)))
         return cls(frames, **kwargs)
 
     @classmethod
@@ -87,11 +92,12 @@ class Model(object):
             trajec = [structures]
         else:
             trajec = structures
-        for frame in trajec:
+        for i, frame in enumerate(trajec):
             coords = frame.cart_coords
             a, b, c, alpha, beta, gamma = frame.lattice.parameters
             types = [s.symbol for s in frame.species]
-            frames.append(pdb(coords, types, a, b, c, alpha, beta, gamma))
+            frames.append(pdb(coords, types, a, b, c, alpha, beta,
+                              gamma, model=(i+1)))
         return cls(frames, **kwargs)
 
     @classmethod
@@ -113,8 +119,12 @@ class Model(object):
 
     @active_frame.setter
     def active_frame(self, frame):
-        self._active_frame = max(
-            -self.num_frames, min(frame, self.num_frames-1))
+        i = max(-self.num_frames, min(frame, self.num_frames-1))
+        self._active_frame = i
+        if self._model is not None:
+            if i < 0:
+                i = self.num_frames + i
+            self._model.setFrame(i)
 
     def add_representation(self, style, selection=None):
         """
@@ -145,21 +155,40 @@ class Model(object):
           representation (int): the ID of the representation to be replaced
 
         """
-        sel = {'model': -1}
+        if self.model_id is not None:
+            sel = {'model': self.model_id}
+        else:
+            sel = {'model': -1}
         if selection is not None:
             sel.update(selection)
         if style in atom_styles:
             style = atom_styles[style]
         self.representations[representation] = (sel, style)
+        self.update()
 
-    def add_to_view(self, view):
+    def add_to_view(self, view, model_id):
         """
         Arguments:
           view (py3Dmol.view): py3Dmol view object
+          model_id (int): the ID of the current model
 
         """
-        data = self.frames[self.active_frame]
-        for selection, style in self.representations:
-            style.add_to_view(data, self.frmt, selection, view)
+        self.model_id = model_id
+        self._view = view
+        data = "\n".join(self.frames)
+        view.addModelsAsFrames(data, self.frmt)
+        self._model = view.getModel(-1)
+        for sel, style in self.representations:
+            style.apply(self._model, selection=sel)
+        self._model.setFrame(self.active_frame)
         if self.show_cell:
-            view.addUnitCell({'model': -1}, self.cell_style)
+            view.addUnitCell({'model': self.model_id}, self.cell_style)
+
+    def update(self):
+        if self._model is None:
+            raise ValueError(
+                "Model has to be added to a view before it can be updated.")
+        else:
+            for sel, style in self.representations:
+                style.apply(self._model, selection=sel)
+        self._model.setFrame(self.active_frame)
